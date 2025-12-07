@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:localhost)",
+      "WebFetch(domain:127.0.0.1)",
+      "Bash(npm run dev:*)",
+      "Bash(curl:*)",
+      "Read(//c//**)",
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "WebSearch",
+      "Bash(chmod:*)",
+      "Bash(find:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker-compose build:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose:*)",
+      "Bash(npm install)",
+      "Bash(npm install:*)",
+      "Bash(dir)",
+      "Bash(npx:*)",
+      "Bash(npm start)",
+      "Bash(PORT=3001 npm start)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(tree:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(python:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
