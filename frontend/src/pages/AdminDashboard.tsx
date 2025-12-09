@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import { Rule, RuleStats, RuleGenerationResponse } from '../lib/types';
+import { Rule, RuleStats, RuleGenerationResponse, DraftRule, RulePreviewResponse, RuleBulkSubmitResponse } from '../lib/types';
 import {
   RuleStatsCards,
   RuleUploadForm,
@@ -8,6 +8,7 @@ import {
   RulesTable,
   Pagination,
   RuleEditModal,
+  RulePreviewPanel,
 } from '../components/admin';
 
 // POC: Hard-coded super admin user ID
@@ -40,6 +41,11 @@ export default function AdminDashboard() {
   // Upload state
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<RuleGenerationResponse | null>(null);
+
+  // Preview state (new workflow)
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewData, setPreviewData] = useState<RulePreviewResponse | null>(null);
+  const [draftRules, setDraftRules] = useState<DraftRule[]>([]);
 
   // Edit modal state
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
@@ -101,32 +107,62 @@ export default function AdminDashboard() {
     fetchStats();
   }, []);
 
-  // Handle file upload
+  // Handle file upload - NEW PREVIEW WORKFLOW
   const handleUpload = async (file: File, documentTitle: string) => {
     try {
       setUploading(true);
       setError(null);
       setUploadResult(null);
+      setPreviewData(null);
 
-      const response = await api.generateRulesFromDocument(
+      // Use preview endpoint instead of generate
+      const response = await api.previewRulesFromDocument(
         file,
         documentTitle,
         SUPER_ADMIN_USER_ID
       );
 
-      const result: RuleGenerationResponse = response.data;
-      setUploadResult(result);
+      const result: RulePreviewResponse = response.data;
+      setPreviewData(result);
 
-      if (result.success) {
-        // Refresh rules list and stats
-        await fetchRules();
-        await fetchStats();
+      if (result.success && result.draft_rules.length > 0) {
+        setDraftRules(result.draft_rules);
+        setShowPreview(true);
+      } else if (result.errors.length > 0) {
+        setError(result.errors.join(', '));
       }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to generate rules');
+      setError(err.response?.data?.detail || 'Failed to generate rule preview');
     } finally {
       setUploading(false);
     }
+  };
+
+  // Handle preview submit success
+  const handlePreviewSubmitSuccess = async (response: RuleBulkSubmitResponse) => {
+    setShowPreview(false);
+    setPreviewData(null);
+    setDraftRules([]);
+
+    // Show success message as uploadResult for compatibility
+    setUploadResult({
+      success: response.success,
+      rules_created: response.rules_created,
+      rules_failed: response.rules_failed,
+      rules: [],
+      errors: response.errors,
+    });
+
+    // Refresh rules list and stats
+    await fetchRules();
+    await fetchStats();
+  };
+
+  // Handle preview cancel
+  const handlePreviewCancel = () => {
+    setShowPreview(false);
+    setPreviewData(null);
+    setDraftRules([]);
   };
 
   // Handle rule update
@@ -228,8 +264,80 @@ export default function AdminDashboard() {
       {/* Stats Cards */}
       <RuleStatsCards stats={stats} loading={statsLoading} />
 
-      {/* Upload Section - Only show on Active tab */}
-      {activeTab === 'active' && (
+      {/* Severity Points Configuration Reference */}
+      <div className="bg-white rounded-lg border p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+            Severity Points Configuration
+          </h3>
+          <span className="text-xs text-gray-500">Click on rule's "Edit" to customize points</span>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {/* Critical */}
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="w-3 h-3 rounded-full bg-red-500"></div>
+              <span className="text-sm font-medium text-red-800">Critical</span>
+            </div>
+            <div className="text-2xl font-bold text-red-600">-20</div>
+            <div className="text-xs text-red-600/70 mt-1">Severe penalty</div>
+          </div>
+
+          {/* High */}
+          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+              <span className="text-sm font-medium text-orange-800">High</span>
+            </div>
+            <div className="text-2xl font-bold text-orange-600">-10</div>
+            <div className="text-xs text-orange-600/70 mt-1">Significant penalty</div>
+          </div>
+
+          {/* Medium */}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+              <span className="text-sm font-medium text-yellow-800">Medium</span>
+            </div>
+            <div className="text-2xl font-bold text-yellow-600">-5</div>
+            <div className="text-xs text-yellow-600/70 mt-1">Moderate penalty</div>
+          </div>
+
+          {/* Low */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+              <span className="text-sm font-medium text-blue-800">Low</span>
+            </div>
+            <div className="text-2xl font-bold text-blue-600">-2</div>
+            <div className="text-xs text-blue-600/70 mt-1">Minor penalty</div>
+          </div>
+        </div>
+
+        <p className="text-xs text-gray-500 mt-4 text-center">
+          These are the default point deductions per severity. Each rule can be customized individually using the Edit button.
+        </p>
+      </div>
+
+      {/* Rule Preview Panel - Shows when previewing generated rules */}
+      {showPreview && previewData && (
+        <RulePreviewPanel
+          documentTitle={previewData.document_title}
+          draftRules={draftRules}
+          totalExtracted={previewData.total_extracted}
+          errors={previewData.errors}
+          onRulesChange={setDraftRules}
+          onSubmitSuccess={handlePreviewSubmitSuccess}
+          onCancel={handlePreviewCancel}
+        />
+      )}
+
+      {/* Upload Section - Only show on Active tab and when NOT previewing */}
+      {activeTab === 'active' && !showPreview && (
         <RuleUploadForm
           onUpload={handleUpload}
           uploading={uploading}
@@ -243,8 +351,8 @@ export default function AdminDashboard() {
           <button
             onClick={() => setActiveTab('active')}
             className={`py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'active'
-                ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
           >
             <span className="flex items-center gap-2">
@@ -260,8 +368,8 @@ export default function AdminDashboard() {
           <button
             onClick={() => setActiveTab('deactivated')}
             className={`py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'deactivated'
-                ? 'border-red-500 text-red-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              ? 'border-red-500 text-red-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
           >
             <span className="flex items-center gap-2">

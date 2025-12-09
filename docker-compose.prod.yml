@@ -1,0 +1,142 @@
+version: '3.8'
+
+# =============================================================================
+# PRODUCTION DOCKER COMPOSE
+# =============================================================================
+# Usage: docker compose -f docker-compose.prod.yml up -d
+# 
+# Prerequisites:
+#   1. Copy .env.production.example to .env.production
+#   2. Update all placeholder values with real credentials
+#   3. Ensure Ollama model is pulled: docker exec compliance-ollama ollama pull qwen2.5:7b
+
+services:
+  # ===========================================================================
+  # PostgreSQL Database
+  # ===========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: compliance-postgres
+    restart: always
+    env_file:
+      - .env.production
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - compliance-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # NOTE: Port not exposed in production - access only through internal network
+
+  # ===========================================================================
+  # Redis Cache
+  # ===========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: compliance-redis
+    restart: always
+    networks:
+      - compliance-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # NOTE: Port not exposed in production - access only through internal network
+
+  # ===========================================================================
+  # Ollama LLM Service
+  # ===========================================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: compliance-ollama
+    restart: always
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - compliance-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # NOTE: For CPU-only, remove the deploy section above
+
+  # ===========================================================================
+  # FastAPI Backend
+  # ===========================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    container_name: compliance-backend
+    restart: always
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - OLLAMA_TIMEOUT=${OLLAMA_TIMEOUT}
+      - OLLAMA_MAX_RETRIES=${OLLAMA_MAX_RETRIES}
+      - ENVIRONMENT=production
+      - LOG_LEVEL=${LOG_LEVEL}
+    ports:
+      - "8000:8000"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - compliance-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===========================================================================
+  # React Frontend (Production Build with Nginx)
+  # ===========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL}
+    container_name: compliance-frontend
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - compliance-network
+    # Optional: Mount SSL certificates for HTTPS
+    # volumes:
+    #   - /etc/letsencrypt:/etc/letsencrypt:ro
+
+volumes:
+  postgres_data:
+  ollama_data:
+  uploads:
+
+networks:
+  compliance-network:
+    driver: bridge

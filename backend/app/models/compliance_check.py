@@ -23,3 +23,8 @@ class ComplianceCheck(Base):
     # Relationships
     submission = relationship("Submission", back_populates="compliance_checks")
     violations = relationship("Violation", back_populates="check", cascade="all, delete-orphan")
+
+    @property
+    def has_deep_analysis(self) -> bool:
+        """Check if deep analysis results exist for this check."""
+        return bool(self.deep_analysis)

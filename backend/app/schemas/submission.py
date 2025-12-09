@@ -17,6 +17,7 @@ class SubmissionResponse(BaseModel):
     status: str
     submitted_at: datetime
     submitted_by: Optional[uuid.UUID] = None
+    has_deep_analysis: bool = False
 
     class Config:
         from_attributes = True

@@ -3,67 +3,9 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List
 import logging
-from pydantic import BaseModel
 from ..config import settings
 
 logger = logging.getLogger(__name__)
-
-
-# ==============================================
-# FEATURE 3: DETERMINISTIC LLM PROMPT TEMPLATE
-# Ensures predictable JSON output from the model
-# WHY: Standardized prompts produce more consistent, parseable responses
-#      and reduce LLM hallucination/format errors
-# ==============================================
-LLM_PROMPT_TEMPLATE = """
-You are a compliance assistant analyzing marketing content.
-
-Analyze this chunk of content against the provided compliance rules.
-
-Return ONLY JSON formatted exactly like this:
-{{
-  "violations": [
-    {{
-      "rule_id": "optional rule identifier",
-      "message": "description of the violation",
-      "confidence": 0.85,
-      "severity": "critical|high|medium|low",
-      "category": "irdai|brand|seo",
-      "start_offset": 0,
-      "end_offset": 100
-    }}
-  ]
-}}
-
-Rules:
-{rules_text}
-
-Chunk:
-"""{chunk_text}"""
-
-Return ONLY the JSON object, no other text.
-"""
-
-
-# ==============================================
-# FEATURE 4: JSON SCHEMA VALIDATION USING PYDANTIC
-# Ensures LLM response fits expected schema
-# WHY: Type-safe validation prevents downstream errors from malformed LLM output
-# ==============================================
-class LLMViolation(BaseModel):
-    """Pydantic model for a single violation from LLM."""
-    rule_id: Optional[str] = None
-    message: str
-    confidence: float
-    severity: Optional[str] = "medium"
-    category: Optional[str] = "irdai"
-    start_offset: Optional[int] = None
-    end_offset: Optional[int] = None
-
-
-class LLMResponse(BaseModel):
-    """Pydantic model for complete LLM response."""
-    violations: List[LLMViolation]
 
 
 class OllamaService:
@@ -219,78 +161,216 @@ class OllamaService:
             "overall_assessment": "AI analysis service temporarily unavailable. Please try again later.",
             "key_issues": ["AI service unavailable"]
         })
-
-    # ==============================================
-    # FEATURE 3 (CONTINUED): PROMPT BUILDING METHOD
-    # Build prompts using the deterministic template
-    # ==============================================
-    def build_prompt_for_chunk(self, chunk_text: str, rules_text: str) -> str:
-        """Build a standardized prompt for a single chunk."""
-        return LLM_PROMPT_TEMPLATE.format(
-            chunk_text=chunk_text,
-            rules_text=rules_text
+    
+    async def generate_rules_from_context(
+        self,
+        search_results: List[Dict[str, Any]],
+        industry: str,
+        scope: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate structured compliance rules from search results.
+        
+        Used during onboarding to extract actionable rules from
+        regulatory documents and best practices.
+        
+        Args:
+            search_results: List of search results with title, snippet, url
+            industry: Industry context (e.g., "insurance")
+            scope: Rule scope ("regulatory", "brand", "seo")
+            
+        Returns:
+            List of rule dicts with category, severity, rule_text, keywords
+        """
+        # Map scope to category
+        category_map = {
+            "regulatory": "irdai",  # Can be made dynamic per industry
+            "brand": "brand",
+            "seo": "seo",
+            "qualitative": "brand"
+        }
+        category = category_map.get(scope, "irdai")
+        
+        # Build prompt for rule extraction
+        prompt = self._build_rule_extraction_prompt(
+            search_results=search_results,
+            industry=industry,
+            category=category
         )
-
-    # ==============================================
-    # FEATURE 4 (CONTINUED): VALIDATION METHOD
-    # Generate and validate LLM response using Pydantic
-    # ==============================================
-    async def generate_and_validate_llm_response(self, prompt: str) -> Dict[str, Any]:
-        """Generate LLM response and validate it against Pydantic schema."""
+        
+        system_prompt = (
+            "You are a compliance expert specializing in extracting structured rules "
+            "from regulatory documents and best practices. Return ONLY valid JSON."
+        )
+        
         try:
-            # Get raw response from LLM
-            raw_response = await self.generate_response(
+            response = await self.generate_response(
                 prompt=prompt,
-                system_prompt="You are a compliance expert. Return ONLY valid JSON."
+                system_prompt=system_prompt
             )
             
-            # Try to parse as JSON
-            try:
-                response_dict = json.loads(raw_response)
-                # Validate with Pydantic
-                validated = LLMResponse(**response_dict)
-                return validated.model_dump()
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"LLM response validation failed: {str(e)}")
-                # Use fallback parser
-                return heuristic_parse(raw_response)
-                
+            # Parse JSON response
+            rules = self._parse_rule_extraction_response(response, category)
+            
+            # Add source URLs
+            for i, rule in enumerate(rules):
+                if i < len(search_results):
+                    rule["source_url"] = search_results[i].get("url", "")
+            
+            logger.info(f"Generated {len(rules)} rules for {category} from {len(search_results)} sources")
+            
+            return rules
+            
         except Exception as e:
-            logger.error(f"Error in generate_and_validate_llm_response: {str(e)}")
-            return {"violations": []}
+            logger.error(f"Rule generation failed: {str(e)}")
+            return []
+    
+    def _build_rule_extraction_prompt(
+        self,
+        search_results: List[Dict],
+        industry: str,
+        category: str
+    ) -> str:
+        """Build prompt for extracting rules from search results."""
+        # Format search results
+        sources = []
+        for i, result in enumerate(search_results[:5], 1):  # Limit to top 5
+            sources.append(
+                f"Source {i}:\n"
+                f"Title: {result.get('title', 'N/A')}\n"
+                f"Content: {result.get('snippet', 'N/A')}\n"
+            )
+        
+        sources_text = "\n\n".join(sources)
+        
+        return f"""Extract actionable compliance rules from the following sources for the {industry} industry.
 
+{sources_text}
 
-# ==============================================
-# FEATURE 5: FALLBACK PARSER
-# Used when LLM output is broken or invalid JSON
-# WHY: Graceful degradation ensures system doesn't crash on bad LLM output
-#      while still attempting to extract useful information
-# ==============================================
-def heuristic_parse(resp_text: str) -> Dict[str, Any]:
-    """Parse LLM response using heuristics when JSON parsing fails."""
-    text = resp_text.lower()
-    violations = []
+**Your task:**
+Extract 3-5 specific, actionable compliance rules from these sources.
+
+**Output Format (JSON only, no markdown):**
+[
+  {{
+    "rule_text": "Clear, specific compliance requirement",
+    "severity": "critical|high|medium|low",
+    "keywords": ["keyword1", "keyword2"],
+    "points_deduction": -20.0 (for critical) | -10.0 (high) | -5.0 (medium) | -2.0 (low),
+    "confidence_score": 0.0-1.0
+  }}
+]
+
+**Guidelines:**
+- Focus on specific, testable requirements
+- Extract exact language from sources where possible
+- Assign severity based on regulatory importance
+- Include relevant keywords for rule matching
+- Set high confidence (0.8+) for explicit regulations
+- Limit to 5 most important rules
+
+Return ONLY the JSON array, no other text.
+"""
     
-    # Check for common compliance red flags
-    if "guaranteed" in text or "100%" in text:
-        violations.append({
-            "rule_id": None,
-            "message": "Possible guaranteed return claim detected",
-            "confidence": 0.4,
-            "severity": "high",
-            "category": "irdai"
-        })
-    
-    if "risk-free" in text or "no risk" in text:
-        violations.append({
-            "rule_id": None,
-            "message": "Possible risk-free claim detected",
-            "confidence": 0.35,
-            "severity": "high",
-            "category": "irdai"
-        })
-    
-    return {"violations": violations}
+    def _parse_rule_extraction_response(
+        self,
+        response: str,
+        category: str
+    ) -> List[Dict[str, Any]]:
+        """Parse LLM response into structured rules."""
+        try:
+            # Clean response (remove markdown if present)
+            if "```json" in response:
+                start = response.find("```json") + 7
+                end = response.find("```", start)
+                response = response[start:end].strip()
+            elif "```" in response:
+                start = response.find("```") + 3
+                end = response.find("```", start)
+                response = response[start:end].strip()
+            
+            rules_data = json.loads(response)
+            
+            # Ensure it's a list
+            if isinstance(rules_data, dict):
+                rules_data = [rules_data]
+            
+            # Validate and add category
+            validated_rules = []
+            for rule in rules_data:
+                if "rule_text" in rule:
+                    validated_rules.append({
+                        "category": category,
+                        "rule_text": rule["rule_text"],
+                        "severity": rule.get("severity", "medium"),
+                        "keywords": rule.get("keywords", []),
+                        "points_deduction": rule.get("points_deduction", -5.0),
+                        "confidence_score": rule.get("confidence_score", 0.7)
+                    })
+            
+            return validated_rules
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse rule extraction response: {str(e)}")
+            logger.debug(f"Response was: {response[:500]}")
+            return []
+
+    async def analyze_line_for_violations(
+        self,
+        line_content: str,
+        line_number: int,
+        document_context: str,
+        rules: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Analyze a single line for compliance violations.
+        
+        Used by Deep Compliance Research Mode.
+        LLM role is LIMITED to violation detection and context generation.
+        Score calculation is handled by deterministic Python code.
+        
+        Args:
+            line_content: The text of the line to analyze
+            line_number: Position in document
+            document_context: Document title for context
+            rules: List of rule dicts with id, category, rule_text, severity, keywords
+        
+        Returns:
+            dict with 'relevance_context' and 'violations' list
+        """
+        from .prompts.deep_analysis_prompt import (
+            build_deep_analysis_prompt,
+            parse_line_analysis_response
+        )
+        
+        # Build prompts
+        prompts = build_deep_analysis_prompt(
+            line_content=line_content,
+            line_number=line_number,
+            document_title=document_context,
+            rules=rules
+        )
+        
+        try:
+            # Call LLM
+            response_text = await self.generate_response(
+                prompt=prompts["user_prompt"],
+                system_prompt=prompts["system_prompt"]
+            )
+            
+            # Parse response
+            result = parse_line_analysis_response(response_text)
+            
+            logger.debug(f"Line {line_number} analysis: {len(result.get('violations', []))} violations found")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error analyzing line {line_number}: {str(e)}")
+            return {
+                "relevance_context": "Error during analysis",
+                "violations": []
+            }
 
     async def __aenter__(self):
         return self

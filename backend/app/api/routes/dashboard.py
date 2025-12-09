@@ -6,6 +6,12 @@ from ...database import get_db
 from ...models.submission import Submission
 from ...models.compliance_check import ComplianceCheck
 from ...schemas.submission import SubmissionResponse
+from ...schemas.dashboard import (
+    ComplianceTrendsResponse,
+    ViolationsHeatmapResponse,
+    TopViolationResponse
+)
+from ...services.dashboard_service import dashboard_service
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -43,3 +49,57 @@ def get_recent_submissions(
     ).limit(limit).all()
 
     return submissions
+
+
+@router.get("/trends", response_model=ComplianceTrendsResponse)
+def get_compliance_trends(
+    days: int = 30,
+    db: Session = Depends(get_db)
+):
+    """Get compliance score trends for the last N days.
+    
+    Returns daily aggregated scores with dates, scores, and counts.
+    Uses date-based bucketing for consistent time-axis visualization.
+    
+    Args:
+        days: Number of days to look back (default 30)
+        db: Database session
+        
+    Returns:
+        ComplianceTrendsResponse with dates, scores, and counts arrays
+    """
+    return dashboard_service.get_compliance_trends(db, days)
+
+
+@router.get("/violations-heatmap", response_model=ViolationsHeatmapResponse)
+def get_violations_heatmap(db: Session = Depends(get_db)):
+    """Get violation distribution by category and severity.
+    
+    Returns pivoted data in ApexCharts-ready format with:
+    - series: List of severity levels with counts per category
+    - categories: List of category names (IRDAI, Brand, SEO)
+    
+    Returns:
+        ViolationsHeatmapResponse ready for ApexCharts heatmap
+    """
+    return dashboard_service.get_violations_heatmap(db)
+
+
+@router.get("/top-violations", response_model=List[TopViolationResponse])
+def get_top_violations(
+    limit: int = 5,
+    db: Session = Depends(get_db)
+):
+    """Get most frequently occurring violations.
+    
+    Groups violations by description, category, and severity,
+    counts occurrences, and returns the top N violations.
+    
+    Args:
+        limit: Maximum number of violations to return (default 5)
+        db: Database session
+        
+    Returns:
+        List of top violations with description, count, severity, and category
+    """
+    return dashboard_service.get_top_violations(db, limit)

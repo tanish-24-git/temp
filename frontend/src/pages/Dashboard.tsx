@@ -6,34 +6,69 @@ import { AlertCircle, CheckCircle2, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import ApexCharts from "react-apexcharts";
 import { api } from "../lib/api";
-import { DashboardStats } from "../lib/types";
+import {
+  DashboardStats,
+  ComplianceTrendsResponse,
+  ViolationsHeatmapResponse,
+  TopViolation,
+} from "../lib/types";
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [trendsData, setTrendsData] = useState<ComplianceTrendsResponse | null>(null);
+  const [heatmapData, setHeatmapData] = useState<ViolationsHeatmapResponse | null>(null);
+  const [topViolations, setTopViolations] = useState<TopViolation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchDashboardData = async () => {
       try {
-        const response = await api.getDashboardStats();
-        setStats(response.data);
-      } catch (error) {
-        console.error("Failed to fetch stats:", error);
+        // Fetch all dashboard data in parallel
+        const [statsRes, trendsRes, heatmapRes, topViolationsRes] = await Promise.all([
+          api.getDashboardStats(),
+          api.getDashboardTrends(30),
+          api.getViolationsHeatmap(),
+          api.getTopViolations(5),
+        ]);
+
+        setStats(statsRes.data);
+        setTrendsData(trendsRes.data);
+        setHeatmapData(heatmapRes.data);
+        setTopViolations(topViolationsRes.data);
+      } catch (err) {
+        console.error("Failed to fetch dashboard data:", err);
+        setError("Failed to load dashboard data. Please try again later.");
       } finally {
         setLoading(false);
       }
     };
 
-    fetchStats();
+    fetchDashboardData();
   }, []);
 
   if (loading) {
-    return <div className="text-center py-12">Loading...</div>;
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
   }
 
-  // Calculate overall score from stats or use default (92 for premium demo)
-  const overallScore = 92; // Premium score for demo
-  const grade = "A";
+  if (error) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="text-center">
+          <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
+          <p className="text-gray-600">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Use real data from API - fallback to 0 if no data
+  const overallScore = stats?.avg_compliance_score || 0;
+  const grade = overallScore >= 90 ? 'A' : overallScore >= 80 ? 'B' : overallScore >= 70 ? 'C' : overallScore >= 60 ? 'D' : 'F';
 
   // 1. HERO GAUGE – This alone wins the demo with emerald/teal gradient
   const heroGaugeOption = {
@@ -80,28 +115,16 @@ export default function Dashboard() {
     backgroundColor: "transparent",
   };
 
-  // 2. Trend – last 15 submissions (mock data for now)
+  // 2. Trend – Use real API data (last 30 days)
+  const trendScores = trendsData?.scores || [];
+  const trendDates = trendsData?.dates || [];
+  const hasTrendData = trendScores.length > 0;
+
   const trendOptions: ApexOptions = {
     series: [
       {
         name: "Score",
-        data: [
-          58,
-          64,
-          71,
-          78,
-          82,
-          75,
-          88,
-          91,
-          85,
-          89,
-          92,
-          87,
-          90,
-          93,
-          overallScore,
-        ],
+        data: hasTrendData ? trendScores : [0],
       },
     ],
     chart: {
@@ -119,22 +142,29 @@ export default function Dashboard() {
     tooltip: { x: { format: "dd MMM" } },
     xaxis: {
       type: "datetime",
-      categories: Array(15)
-        .fill(null)
-        .map((_, i) =>
-          new Date(Date.now() - (14 - i) * 24 * 60 * 60 * 1000).toISOString()
-        ),
+      categories: hasTrendData
+        ? trendDates.map(d => new Date(d).toISOString())
+        : [new Date().toISOString()],
+    },
+    noData: {
+      text: "No trend data available",
+      align: "center",
+      verticalAlign: "middle",
+      style: { color: "#999", fontSize: "14px" },
     },
   };
 
-  // 3. Heatmap
+  // 3. Heatmap – Use real API data
+  const heatmapSeries = heatmapData?.series || [
+    { name: "Critical", data: [0, 0, 0] },
+    { name: "High", data: [0, 0, 0] },
+    { name: "Medium", data: [0, 0, 0] },
+    { name: "Low", data: [0, 0, 0] },
+  ];
+  const heatmapCategories = heatmapData?.categories || ["IRDAI", "Brand", "SEO"];
+
   const heatmapOptions: ApexOptions = {
-    series: [
-      { name: "Critical", data: [14, 4, 2] },
-      { name: "High", data: [11, 7, 4] },
-      { name: "Medium", data: [15, 9, 8] },
-      { name: "Low", data: [22, 14, 18] },
-    ],
+    series: heatmapSeries,
     chart: { type: "heatmap", height: 280, toolbar: { show: false } },
     plotOptions: {
       heatmap: {
@@ -153,15 +183,21 @@ export default function Dashboard() {
       style: { fontSize: "16px", fontWeight: "bold" },
     },
     colors: ["#ef4444"],
-    xaxis: { categories: ["IRDAI (50%)", "Brand (30%)", "SEO (20%)"] },
+    xaxis: {
+      categories: heatmapCategories.map((cat, idx) => {
+        const weights = ["50%", "30%", "20%"];
+        return `${cat} (${weights[idx] || ""})`;
+      })
+    },
     title: { text: "Violations by Category & Severity", align: "center" },
   };
 
-  // 4. Donut
-  const totalSubmissions = stats?.total_submissions || 437;
-  const passedCount = Math.round(totalSubmissions * 0.714); // ~71.4%
-  const flaggedCount = Math.round(totalSubmissions * 0.215); // ~21.5%
-  const failedCount = totalSubmissions - passedCount - flaggedCount;
+  // 4. Donut - Use real data from stats
+  const totalSubmissions = stats?.total_submissions || 0;
+  const flaggedCount = stats?.flagged_count || 0;
+  const pendingCount = stats?.pending_count || 0;
+  const passedCount = Math.max(0, totalSubmissions - flaggedCount - pendingCount);
+  const failedCount = pendingCount; // Using pending as "needs review"
 
   const donutOptions: ApexOptions = {
     series: [passedCount, flaggedCount, failedCount],
@@ -176,9 +212,19 @@ export default function Dashboard() {
     plotOptions: { pie: { donut: { size: "70%" } } },
   };
 
-  // 5. Top 5 violations bar
+  // 5. Top 5 violations bar – Use real API data
+  const hasTopViolations = topViolations.length > 0;
+  const violationCounts = hasTopViolations
+    ? topViolations.map(v => v.count)
+    : [0];
+  const violationNames = hasTopViolations
+    ? topViolations.map(v => v.description.length > 40
+      ? v.description.substring(0, 37) + "..."
+      : v.description)
+    : ["No violations found"];
+
   const barOptions: ApexOptions = {
-    series: [{ data: [24, 19, 15, 12, 9] }],
+    series: [{ data: violationCounts }],
     chart: { type: "bar", height: 300, toolbar: { show: false } },
     plotOptions: {
       bar: { borderRadius: 8, horizontal: true, distributed: true },
@@ -189,13 +235,13 @@ export default function Dashboard() {
       style: { fontSize: "14px", fontWeight: "bold" },
     },
     xaxis: {
-      categories: [
-        "Guaranteed returns claims",
-        "Prohibited words (cheapest/best)",
-        "Missing risk disclosure",
-        "Title > 60 characters",
-        "Missing meta description",
-      ],
+      categories: violationNames,
+    },
+    noData: {
+      text: "No violations data available",
+      align: "center",
+      verticalAlign: "middle",
+      style: { color: "#999", fontSize: "14px" },
     },
   };
 
@@ -203,23 +249,7 @@ export default function Dashboard() {
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="max-w-7xl mx-auto">
         {/* KILLER METRIC BANNER */}
-        <div className="mb-6 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-lg shadow-lg p-4 text-white">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="w-8 h-8" />
-              <div>
-                <p className="text-sm opacity-90">Impact This Quarter</p>
-                <p className="text-2xl font-bold">
-                  ₹47 Lacs in potential fines prevented
-                </p>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="text-4xl font-bold">₹47L</p>
-              <p className="text-xs opacity-75">Saved</p>
-            </div>
-          </div>
-        </div>
+
 
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900">
@@ -257,7 +287,7 @@ export default function Dashboard() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <TrendingUp className="w-5 h-5 text-green-600" />
-                Compliance Trend (Last 15 Submissions)
+                Compliance Trend (Last 30 Days)
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -321,7 +351,7 @@ export default function Dashboard() {
           {[
             {
               label: "Total Submissions",
-              value: String(stats?.total_submissions || 437),
+              value: String(stats?.total_submissions || 0),
               color: "bg-blue-500",
             },
             {
@@ -330,11 +360,15 @@ export default function Dashboard() {
               color: "bg-green-500",
             },
             {
-              label: "Flagged Today",
-              value: String(stats?.flagged_count || 11),
+              label: "Flagged",
+              value: String(stats?.flagged_count || 0),
               color: "bg-amber-500",
             },
-            { label: "Critical Violations", value: "20", color: "bg-red-500" },
+            {
+              label: "Pending Review",
+              value: String(stats?.pending_count || 0),
+              color: "bg-red-500"
+            },
           ].map((stat) => (
             <Card key={stat.label}>
               <CardContent className="p-6 text-center">
@@ -351,3 +385,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

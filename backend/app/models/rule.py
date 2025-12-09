@@ -33,5 +33,30 @@ class Rule(Base):
         comment="Super admin who created this rule"
     )
 
+    # Adaptive Compliance Engine: Auto-generation tracking
+    is_auto_generated = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+        index=True,
+        comment="True if rule was auto-generated from onboarding"
+    )
+    generated_from_industry = Column(
+        String(100),
+        nullable=True,
+        index=True,
+        comment="Industry context for auto-generated rules (e.g., 'insurance', 'healthcare')"
+    )
+    generation_source = Column(
+        Text,
+        nullable=True,
+        comment="Source URL or search query used to generate this rule"
+    )
+    confidence_score = Column(
+        Numeric(3, 2),
+        nullable=True,
+        comment="AI confidence in rule extraction (0.0-1.0)"
+    )
+
     # Relationships
     creator = relationship("User", back_populates="created_rules", foreign_keys=[created_by])

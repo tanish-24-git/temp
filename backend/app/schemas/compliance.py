@@ -29,6 +29,7 @@ class ComplianceCheckResponse(BaseModel):
     grade: str
     ai_summary: str
     check_date: datetime
+    has_deep_analysis: bool = False
     violations: List[ViolationResponse] = []
 
     class Config:

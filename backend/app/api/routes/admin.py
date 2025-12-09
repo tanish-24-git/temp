@@ -22,6 +22,14 @@ from ...schemas.rule import (
     RuleListResponse,
     RuleGenerationResponse
 )
+from ...schemas.rule_preview import (
+    RulePreviewResponse,
+    RuleRefineRequest,
+    RuleRefineResponse,
+    RuleBulkSubmitRequest,
+    RuleBulkSubmitResponse,
+    DraftRule
+)
 from ...services.rule_generator_service import rule_generator_service
 from ..deps import get_db_session, require_super_admin
 
@@ -110,6 +118,216 @@ async def generate_rules_from_document(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate rules: {str(e)}"
+        )
+
+
+@router.post(
+    "/rules/preview",
+    response_model=RulePreviewResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Preview rules from document (no save)"
+)
+async def preview_rules_from_document(
+    file: UploadFile = File(..., description="Compliance document (PDF, DOCX, HTML, MD)"),
+    document_title: str = Form(..., description="Document title/name"),
+    current_user: User = Depends(require_super_admin),
+    db: Session = Depends(get_db_session)
+):
+    """
+    Generate compliance rules from document for PREVIEW without saving.
+
+    **Requires**: super_admin role
+
+    **Process**:
+    1. Upload document (PDF, DOCX, HTML, or Markdown)
+    2. Parse document content
+    3. Send to Ollama LLM for rule extraction
+    4. Return draft rules for user review/editing
+    5. NO database save - user must explicitly submit approved rules
+
+    **Returns**: List of draft rules for review and editing
+    """
+    logger.info(f"Rule preview request from user {current_user.id}: {document_title}")
+
+    # Validate file type
+    allowed_extensions = {'.pdf', '.docx', '.html', '.htm', '.md', '.markdown'}
+    file_ext = os.path.splitext(file.filename)[1].lower()
+
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type: {file_ext}. Allowed: {allowed_extensions}"
+        )
+
+    # Map file extension to content type
+    content_type_map = {
+        '.pdf': 'pdf',
+        '.docx': 'docx',
+        '.html': 'html',
+        '.htm': 'html',
+        '.md': 'markdown',
+        '.markdown': 'markdown'
+    }
+    content_type = content_type_map.get(file_ext, 'html')
+
+    # Save uploaded file temporarily
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+            content = await file.read()
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+
+        logger.info(f"Saved uploaded file for preview to: {temp_file_path}")
+
+        # Generate preview (no save)
+        result = await rule_generator_service.preview_rules_from_document(
+            file_path=temp_file_path,
+            content_type=content_type,
+            document_title=document_title,
+            created_by_user_id=current_user.id,
+            db=db
+        )
+
+        # Clean up temp file
+        try:
+            os.unlink(temp_file_path)
+        except Exception as e:
+            logger.warning(f"Failed to delete temp file: {str(e)}")
+
+        return RulePreviewResponse(**result)
+
+    except Exception as e:
+        logger.error(f"Error generating rule preview: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate rule preview: {str(e)}"
+        )
+
+
+@router.post(
+    "/rules/refine",
+    response_model=RuleRefineResponse,
+    summary="Refine a draft rule using AI"
+)
+async def refine_rule_with_ai(
+    request: RuleRefineRequest,
+    current_user: User = Depends(require_super_admin)
+):
+    """
+    Use AI to refine a draft rule based on user instructions.
+
+    **Requires**: super_admin role
+
+    **Use cases**:
+    - Make rule more specific
+    - Improve clarity
+    - Add more actionable language
+    - Suggest better keywords
+
+    **Returns**: Refined rule text and updated keywords
+    """
+    logger.info(f"Rule refinement request from user {current_user.id}")
+
+    try:
+        result = await rule_generator_service.refine_rule_with_ai(
+            rule_text=request.rule_text,
+            refinement_instruction=request.refinement_instruction,
+            category=request.category,
+            severity=request.severity
+        )
+
+        return RuleRefineResponse(**result)
+
+    except Exception as e:
+        logger.error(f"Error refining rule: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to refine rule: {str(e)}"
+        )
+
+
+@router.post(
+    "/rules/bulk-submit",
+    response_model=RuleBulkSubmitResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save approved draft rules to database"
+)
+async def bulk_submit_rules(
+    request: RuleBulkSubmitRequest,
+    current_user: User = Depends(require_super_admin),
+    db: Session = Depends(get_db_session)
+):
+    """
+    Save approved draft rules to the database.
+
+    **Requires**: super_admin role
+
+    **Process**:
+    1. Receives list of approved draft rules from preview
+    2. Validates each rule
+    3. Saves to database
+    4. Returns list of created rule IDs
+
+    **Note**: Only rules with is_approved=True will be saved
+    """
+    logger.info(f"Bulk submit request from user {current_user.id}: {len(request.approved_rules)} rules")
+
+    result = {
+        "success": False,
+        "rules_created": 0,
+        "rules_failed": 0,
+        "created_rule_ids": [],
+        "errors": []
+    }
+
+    approved_rules = [r for r in request.approved_rules if r.is_approved]
+    
+    if not approved_rules:
+        result["errors"].append("No approved rules to save")
+        return RuleBulkSubmitResponse(**result)
+
+    try:
+        for draft in approved_rules:
+            try:
+                new_rule = Rule(
+                    category=draft.category,
+                    rule_text=draft.rule_text,
+                    severity=draft.severity,
+                    keywords=draft.keywords,
+                    pattern=draft.pattern,
+                    points_deduction=float(draft.points_deduction),
+                    is_active=True,
+                    created_by=current_user.id
+                )
+
+                db.add(new_rule)
+                db.flush()
+
+                result["rules_created"] += 1
+                result["created_rule_ids"].append(str(new_rule.id))
+                logger.info(f"Created rule from preview: {new_rule.category} - {new_rule.severity}")
+
+            except Exception as e:
+                result["rules_failed"] += 1
+                result["errors"].append(f"Failed to save rule: {str(e)}")
+                logger.error(f"Error saving rule from preview: {str(e)}")
+
+        db.commit()
+        result["success"] = result["rules_created"] > 0
+
+        logger.info(
+            f"Bulk submit complete: {result['rules_created']} created, "
+            f"{result['rules_failed']} failed"
+        )
+
+        return RuleBulkSubmitResponse(**result)
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error in bulk submit: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save rules: {str(e)}"
         )
 
 

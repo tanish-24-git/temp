@@ -16,8 +16,16 @@ class Submission(Base):
     file_path = Column(String(1000))
     submitted_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())
-    status = Column(String(50), default="pending")  # pending, analyzing, completed, failed
+    
+    # Status field - expanded for chunked processing
+    # Values: uploaded, preprocessing, preprocessed, analyzing, analyzed, failed
+    status = Column(String(50), default="uploaded")
 
     # Relationships
     compliance_checks = relationship("ComplianceCheck", back_populates="submission", cascade="all, delete-orphan")
     submitter = relationship("User")
+    
+    # NEW: Chunks relationship for granular content processing
+    chunks = relationship("ContentChunk", back_populates="submission", 
+                         cascade="all, delete-orphan", 
+                         order_by="ContentChunk.chunk_index")

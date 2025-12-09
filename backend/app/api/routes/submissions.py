@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 import uuid
 import os
@@ -57,7 +58,7 @@ async def upload_submission(
             content_type=content_type,
             original_content=parsed_content,
             file_path=file_path,
-            status="pending"
+            status="uploaded"  # NEW STATUS for chunked workflow
         )
 
         db.add(submission)
@@ -77,11 +78,32 @@ def list_submissions(
     db: Session = Depends(get_db)
 ):
     """List all submissions."""
-    submissions = db.query(Submission).order_by(
+    from ...models.compliance_check import ComplianceCheck
+    from ...models.deep_analysis import DeepAnalysis
+
+    # Join with ComplianceCheck and DeepAnalysis to detect if deep analysis exists
+    results = db.query(
+        Submission,
+        func.count(DeepAnalysis.id) > 0
+    ).outerjoin(
+        ComplianceCheck, Submission.id == ComplianceCheck.submission_id
+    ).outerjoin(
+        DeepAnalysis, ComplianceCheck.id == DeepAnalysis.check_id
+    ).group_by(
+        Submission.id
+    ).order_by(
         Submission.submitted_at.desc()
     ).offset(skip).limit(limit).all()
 
-    return submissions
+    # Construct response with flag
+    response = []
+    for submission, has_deep in results:
+        # Pydantic model conversion requires explicit dict or ORM object
+        sub_dict = submission.__dict__
+        sub_dict["has_deep_analysis"] = has_deep
+        response.append(sub_dict)
+
+    return response
 
 
 @router.get("/{submission_id}", response_model=SubmissionResponse)
@@ -103,7 +125,14 @@ async def analyze_submission(
     submission_id: uuid.UUID,
     db: Session = Depends(get_db)
 ):
-    """Trigger compliance analysis for a submission."""
+    """
+    Trigger compliance analysis for a submission (CHUNK-AWARE).
+    
+    **Workflow**:
+    1. Auto-preprocess if not already chunked
+    2. Run compliance analysis on chunks
+    3. Return results
+    """
     submission = db.query(Submission).filter(Submission.id == submission_id).first()
 
     if not submission:
@@ -112,8 +141,19 @@ async def analyze_submission(
     if submission.status == "analyzing":
         raise HTTPException(400, "Analysis already in progress")
 
-    # Trigger analysis (async in background in production)
     try:
+        # Auto-preprocess if status is 'uploaded' (not yet chunked)
+        if submission.status == "uploaded":
+            from ...services.preprocessing_service import PreprocessingService
+            preprocessing_service = PreprocessingService(db)
+            
+            chunks_created = await preprocessing_service.preprocess_submission(
+                submission_id=submission_id
+            )
+            
+            db.refresh(submission)
+        
+        # Run compliance analysis (chunk-aware)
         await compliance_engine.analyze_submission(str(submission_id), db)
 
         return {

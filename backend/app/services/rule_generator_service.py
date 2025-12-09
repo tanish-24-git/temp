@@ -188,6 +188,216 @@ class RuleGeneratorService:
             result["errors"].append(f"Unexpected error: {str(e)}")
             return result
 
+    async def preview_rules_from_document(
+        self,
+        file_path: str,
+        content_type: str,
+        document_title: str,
+        created_by_user_id: uuid.UUID,
+        db: Session
+    ) -> Dict[str, Any]:
+        """
+        Generate compliance rules from document for PREVIEW (no database save).
+        
+        This method extracts and validates rules but returns them as draft objects
+        for user review and editing before final submission.
+
+        Args:
+            file_path: Path to the uploaded document file
+            content_type: Type of document (html, markdown, pdf, docx)
+            document_title: Title/name of the document
+            created_by_user_id: UUID of the super admin
+            db: Database session (for user verification only)
+
+        Returns:
+            dict: {
+                "success": bool,
+                "document_title": str,
+                "draft_rules": List[dict],
+                "total_extracted": int,
+                "errors": List[str]
+            }
+        """
+        logger.info(f"Starting rule PREVIEW from document: {document_title}")
+
+        result = {
+            "success": False,
+            "document_title": document_title,
+            "draft_rules": [],
+            "total_extracted": 0,
+            "errors": []
+        }
+
+        try:
+            # Step 1: Verify user is super_admin
+            user = db.query(User).filter(User.id == created_by_user_id).first()
+            if not user or user.role != "super_admin":
+                result["errors"].append("Only super_admin users can generate rules")
+                return result
+
+            # Step 2: Parse document content
+            logger.info(f"Parsing {content_type} document for preview...")
+            try:
+                parsed_content = await self.parser.parse_content(file_path, content_type)
+            except Exception as e:
+                result["errors"].append(f"Failed to parse document: {str(e)}")
+                return result
+
+            if not parsed_content or len(parsed_content) < 100:
+                result["errors"].append("Document content too short or empty")
+                return result
+
+            logger.info(f"Parsed content length: {len(parsed_content)} characters")
+
+            # Step 3: Build prompt for rule extraction
+            prompt_data = build_rule_extraction_prompt(
+                document_title=document_title,
+                document_type=content_type,
+                document_content=parsed_content
+            )
+
+            # Step 4: Call Ollama for rule extraction
+            logger.info("Sending document to Ollama for rule extraction (preview)...")
+            try:
+                ollama_response = await self.ollama.generate_response(
+                    prompt=prompt_data["user_prompt"],
+                    system_prompt=prompt_data["system_prompt"]
+                )
+            except Exception as e:
+                result["errors"].append(f"Ollama service error: {str(e)}")
+                return result
+
+            # Step 5: Parse and validate JSON response
+            logger.info("Parsing Ollama response for preview...")
+            extracted_rules = self._parse_ollama_response(ollama_response)
+
+            if not extracted_rules:
+                result["errors"].append("No rules extracted from document. Response may be invalid JSON.")
+                return result
+
+            result["total_extracted"] = len(extracted_rules)
+            logger.info(f"Extracted {len(extracted_rules)} rules for preview")
+
+            # Step 6: Validate rules and create draft objects (NO DB SAVE)
+            for idx, rule_data in enumerate(extracted_rules):
+                try:
+                    # Validate rule structure
+                    is_valid, error_msg = validate_extracted_rule(rule_data)
+                    if not is_valid:
+                        logger.warning(f"Invalid rule in preview: {error_msg}")
+                        result["errors"].append(f"Rule {idx + 1}: {error_msg}")
+                        continue
+
+                    # Create draft rule (with temp_id instead of real DB id)
+                    draft_rule = {
+                        "temp_id": f"draft_{uuid.uuid4().hex[:8]}",
+                        "category": rule_data["category"],
+                        "rule_text": rule_data["rule_text"],
+                        "severity": rule_data["severity"],
+                        "keywords": rule_data["keywords"],
+                        "pattern": rule_data.get("pattern"),
+                        "points_deduction": float(rule_data["points_deduction"]),
+                        "is_approved": True  # Default to approved, user can reject
+                    }
+
+                    result["draft_rules"].append(draft_rule)
+                    logger.info(f"Draft rule created: {draft_rule['category']} - {draft_rule['severity']}")
+
+                except Exception as e:
+                    logger.error(f"Error creating draft rule: {str(e)}")
+                    result["errors"].append(f"Rule {idx + 1}: {str(e)}")
+
+            result["success"] = len(result["draft_rules"]) > 0
+            logger.info(
+                f"Preview generation complete: {len(result['draft_rules'])} valid drafts, "
+                f"{len(result['errors'])} errors"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Unexpected error in rule preview: {str(e)}")
+            result["errors"].append(f"Unexpected error: {str(e)}")
+            return result
+
+    async def refine_rule_with_ai(
+        self,
+        rule_text: str,
+        refinement_instruction: str,
+        category: str,
+        severity: str
+    ) -> Dict[str, Any]:
+        """
+        Use AI to refine a draft rule based on user instructions.
+
+        Args:
+            rule_text: Current rule text
+            refinement_instruction: How to refine (e.g., "make more specific")
+            category: Rule category for context
+            severity: Rule severity for context
+
+        Returns:
+            dict: {"success": bool, "refined_text": str, "refined_keywords": list, "error": str}
+        """
+        logger.info(f"Refining rule with AI: {refinement_instruction}")
+
+        try:
+            system_prompt = """You are a compliance rule refinement expert. 
+You help improve compliance rules to be more specific, actionable, and enforceable.
+Respond ONLY with valid JSON in this exact format:
+{
+    "refined_text": "The improved rule text",
+    "keywords": ["keyword1", "keyword2", "keyword3"]
+}
+"""
+            user_prompt = f"""Refine this compliance rule based on the instruction.
+
+CURRENT RULE:
+Category: {category}
+Severity: {severity}
+Text: {rule_text}
+
+REFINEMENT INSTRUCTION: {refinement_instruction}
+
+Provide the refined rule text and updated keywords. Be specific and actionable."""
+
+            response = await self.ollama.generate_response(
+                prompt=user_prompt,
+                system_prompt=system_prompt
+            )
+
+            # Parse response
+            try:
+                import json
+                parsed = json.loads(response)
+                return {
+                    "success": True,
+                    "original_text": rule_text,
+                    "refined_text": parsed.get("refined_text", rule_text),
+                    "refined_keywords": parsed.get("keywords", []),
+                    "error": None
+                }
+            except json.JSONDecodeError:
+                # Try to extract from response
+                return {
+                    "success": True,
+                    "original_text": rule_text,
+                    "refined_text": response.strip(),
+                    "refined_keywords": [],
+                    "error": None
+                }
+
+        except Exception as e:
+            logger.error(f"Error refining rule with AI: {str(e)}")
+            return {
+                "success": False,
+                "original_text": rule_text,
+                "refined_text": rule_text,
+                "refined_keywords": [],
+                "error": str(e)
+            }
+
+
     def _parse_ollama_response(self, response: str) -> List[Dict[str, Any]]:
         """
         Parse Ollama response and extract JSON array of rules.

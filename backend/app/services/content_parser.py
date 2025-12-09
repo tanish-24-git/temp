@@ -92,40 +92,29 @@ class ContentParser:
         return '\n'.join(text)
 
 
-# ================================
-# FEATURE 1: CHUNKING
-# Splits long documents into overlapping chunks
-# WHY: Enables processing of long documents that exceed LLM context limits
-#      by breaking them into manageable pieces with overlap to preserve context
-# ================================
-def chunk_text(text, chunk_size=600, overlap=100):
+class ContentParserService:
     """
-    Break text into overlapping chunks for better LLM processing.
-    
-    Args:
-        text: The input text to chunk
-        chunk_size: Maximum size of each chunk in characters
-        overlap: Number of characters to overlap between chunks
-    
-    Returns:
-        List of chunk dictionaries with index, text, start, and end positions
+    Synchronous wrapper for ContentParser.
+    Used by PreprocessingService which needs sync methods.
     """
-    chunks = []
-    n = len(text)
-    idx = 0
-    i = 0
-    while i < n:
-        start = max(0, i - overlap) if idx > 0 else 0
-        end = min(n, i + chunk_size)
-        chunks.append({
-            "index": idx,
-            "text": text[start:end],
-            "start": start,
-            "end": end
-        })
-        idx += 1
-        i += chunk_size - overlap
-    return chunks
+    
+    def parse_pdf(self, file_path: str) -> str:
+        """Synchronously parse PDF file."""
+        text = []
+        with open(file_path, 'rb') as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                text.append(page.extract_text())
+        return '\n'.join(text)
+    
+    def parse_docx(self, file_path: str) -> str:
+        """Synchronously parse DOCX file."""
+        doc = docx.Document(file_path)
+        text = []
+        for paragraph in doc.paragraphs:
+            text.append(paragraph.text)
+        return '\n'.join(text)
 
 
 content_parser = ContentParser()

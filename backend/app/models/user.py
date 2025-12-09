@@ -17,3 +17,6 @@ class User(Base):
 
     # Phase 2: Relationship to rules created by this user (if super_admin)
     created_rules = relationship("Rule", back_populates="creator", foreign_keys="Rule.created_by")
+    
+    # Adaptive Compliance Engine: User configuration
+    config = relationship("UserConfig", back_populates="user", uselist=False, cascade="all, delete-orphan")

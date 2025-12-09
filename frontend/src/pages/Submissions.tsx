@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Submission } from '../lib/types';
 import { format } from 'date-fns';
+import { BrainCircuit } from 'lucide-react';
 
 export const Submissions: React.FC = () => {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -27,7 +28,7 @@ export const Submissions: React.FC = () => {
   };
 
   const handleAnalyze = async (id: string) => {
-    setActionLoading(prev => ({...prev, [id]: true}));
+    setActionLoading(prev => ({ ...prev, [id]: true }));
     try {
       await api.analyzeSubmission(id);
       // Refresh submissions
@@ -38,7 +39,21 @@ export const Submissions: React.FC = () => {
       console.error('Analysis failed:', error);
       alert('Analysis failed. Please try again.');
     } finally {
-      setActionLoading(prev => ({...prev, [id]: false}));
+      setActionLoading(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handlePreprocess = async (id: string) => {
+    setActionLoading(prev => ({ ...prev, [id]: true }));
+    try {
+      await api.triggerPreprocessing(id);
+      // Refresh submissions to show new status
+      await fetchSubmissions();
+    } catch (error) {
+      console.error('Preprocessing failed:', error);
+      alert('Preprocessing failed. Please try again.');
+    } finally {
+      setActionLoading(prev => ({ ...prev, [id]: false }));
     }
   };
 
@@ -46,7 +61,7 @@ export const Submissions: React.FC = () => {
     if (!confirm('Are you sure you want to delete this submission? This action cannot be undone.')) {
       return;
     }
-    setActionLoading(prev => ({...prev, [id]: true}));
+    setActionLoading(prev => ({ ...prev, [id]: true }));
     try {
       await api.deleteSubmission(id);
       // Refresh submissions
@@ -55,7 +70,7 @@ export const Submissions: React.FC = () => {
       console.error('Delete failed:', error);
       alert('Failed to delete submission. Please try again.');
     } finally {
-      setActionLoading(prev => ({...prev, [id]: false}));
+      setActionLoading(prev => ({ ...prev, [id]: false }));
     }
   };
 
@@ -85,8 +100,17 @@ export const Submissions: React.FC = () => {
 
   const getStatusBadge = (status: string) => {
     const colors: Record<string, string> = {
+      // Legacy statuses
       pending: 'bg-yellow-100 text-yellow-800',
+
+      // New chunked workflow statuses
+      uploaded: 'bg-yellow-100 text-yellow-800',
+      preprocessing: 'bg-indigo-100 text-indigo-800',
+      preprocessed: 'bg-purple-100 text-purple-800',
       analyzing: 'bg-blue-100 text-blue-800',
+      analyzed: 'bg-green-100 text-green-800',
+
+      // Legacy completed status
       completed: 'bg-green-100 text-green-800',
       failed: 'bg-red-100 text-red-800',
     };
@@ -110,11 +134,10 @@ export const Submissions: React.FC = () => {
           <button
             onClick={handleDeleteAll}
             disabled={deletingAll}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-              deletingAll
-                ? 'bg-red-400 text-white cursor-not-allowed'
-                : 'bg-red-600 text-white hover:bg-red-700'
-            }`}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${deletingAll
+              ? 'bg-red-400 text-white cursor-not-allowed'
+              : 'bg-red-600 text-white hover:bg-red-700'
+              }`}
           >
             {deletingAll ? 'Deleting All...' : 'Delete All Submissions'}
           </button>
@@ -152,36 +175,76 @@ export const Submissions: React.FC = () => {
                   {submission.content_type.toUpperCase()}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  {getStatusBadge(submission.status)}
+                  <div className="flex items-center gap-2">
+                    {getStatusBadge(submission.status)}
+                    {submission.has_deep_analysis && (
+                      <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-purple-100 text-purple-800 border border-purple-200" title="Deep Analysis Ready">
+                        <BrainCircuit className="w-3 h-3" />
+                        Deep Analyzed
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {format(new Date(submission.submitted_at), 'MMM dd, yyyy')}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  {submission.status === 'pending' && (
+                  <div className="flex gap-2">
+                    {/* Preprocess Button - Only for 'uploaded' or legacy 'pending' status */}
+                    {(submission.status === 'uploaded' || submission.status === 'pending') && (
+                      <button
+                        onClick={() => handlePreprocess(submission.id)}
+                        disabled={actionLoading[submission.id]}
+                        className={`font-medium px-3 py-1 rounded ${actionLoading[submission.id]
+                          ? 'bg-purple-100 text-purple-400 cursor-not-allowed'
+                          : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                      >
+                        {actionLoading[submission.id] ? 'Chunking...' : 'Preprocess'}
+                      </button>
+                    )}
+
+                    {/* Analyze Button - Only for 'preprocessed' or legacy 'pending' status */}
+                    {(submission.status === 'preprocessed' ||
+                      submission.status === 'pending') && (
+                        <button
+                          onClick={() => handleAnalyze(submission.id)}
+                          disabled={actionLoading[submission.id]}
+                          className={`font-medium px-3 py-1 rounded ${actionLoading[submission.id]
+                            ? 'bg-blue-100 text-blue-400 cursor-not-allowed'
+                            : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                        >
+                          {actionLoading[submission.id] ? 'Analyzing...' : 'Analyze'}
+                        </button>
+                      )}
+
+                    {/* Show progress for preprocessing/analyzing */}
+                    {(submission.status === 'preprocessing' || submission.status === 'analyzing') && (
+                      <span className="text-blue-600 font-medium px-3 py-1 animate-pulse">
+                        {submission.status === 'preprocessing' ? 'Chunking Content...' : 'Running Compliance Checks...'}
+                      </span>
+                    )}
+
+                    {/* Show View Results for analyzed or completed */}
+                    {(submission.status === 'analyzed' || submission.status === 'completed') && (
+                      <button
+                        onClick={() => navigate(`/results/${submission.id}`)}
+                        className="bg-green-600 text-white hover:bg-green-700 font-medium px-3 py-1 rounded"
+                      >
+                        View Results
+                      </button>
+                    )}
+
+                    {/* Delete button always available */}
                     <button
-                      onClick={() => handleAnalyze(submission.id)}
+                      onClick={() => handleDelete(submission.id)}
                       disabled={actionLoading[submission.id]}
-                      className={`font-medium ${actionLoading[submission.id] ? 'text-blue-400 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
+                      className={`font-medium px-3 py-1 rounded ${actionLoading[submission.id]
+                        ? 'bg-red-100 text-red-400 cursor-not-allowed'
+                        : 'bg-red-600 text-white hover:bg-red-700'}`}
                     >
-                      {actionLoading[submission.id] ? 'Analyzing...' : 'Analyze'}
+                      {actionLoading[submission.id] ? 'Deleting...' : 'Delete'}
                     </button>
-                  )}
-                  {submission.status === 'completed' && (
-                    <button
-                      onClick={() => navigate(`/results/${submission.id}`)}
-                      className="text-blue-600 hover:text-blue-800 font-medium"
-                    >
-                      View Results
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleDelete(submission.id)}
-                    disabled={actionLoading[submission.id]}
-                    className={`font-medium ml-4 ${actionLoading[submission.id] ? 'text-red-400 cursor-not-allowed' : 'text-red-600 hover:text-red-800'}`}
-                  >
-                    {actionLoading[submission.id] ? 'Deleting...' : 'Delete'}
-                  </button>
+                  </div>
                 </td>
               </tr>
             ))}

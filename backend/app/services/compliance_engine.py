@@ -8,7 +8,6 @@ from ..models.compliance_check import ComplianceCheck
 from ..models.violation import Violation
 from .ollama_service import ollama_service
 from .scoring_service import scoring_service
-from .content_parser import chunk_text
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +53,14 @@ Analyze the following content against these compliance rules:
     @staticmethod
     async def analyze_submission(submission_id: str, db: Session) -> ComplianceCheck:
         """
-        Analyze a submission for compliance.
+        Analyze a submission for compliance (CHUNK-AWARE).
 
         Workflow:
         1. Load submission
-        2. Load active rules
-        3. Build compliance prompt
-        4. Send to Ollama
-        5. Parse response
+        2. Get chunks via ContentRetrievalService (backward compatible)
+        3. Load active rules
+        4. Process each chunk through Ollama
+        5. Aggregate violations with chunk references
         6. Calculate scores
         7. Store results
         """
@@ -77,83 +76,55 @@ Analyze the following content against these compliance rules:
             submission.status = "analyzing"
             db.commit()
 
-            # 2. Load active rules
+            # 2. Get chunks via ContentRetrievalService (handles both chunked and legacy)
+            from .content_retrieval_service import ContentRetrievalService
+            content_service = ContentRetrievalService(db)
+            chunks = content_service.get_analyzable_content(submission_id)
+            
+            logger.info(f"Processing {len(chunks)} chunk(s) for analysis")
+
+            # 3. Load active rules
             rules = ComplianceEngine._load_active_rules(db)
 
-            # 3. Build prompt
-            prompt = ComplianceEngine._build_compliance_prompt(
-                content=submission.original_content,
-                rules=rules
-            )
-
-            # 4. Send to Ollama
-            logger.info("Sending to Ollama for analysis...")
-            
-            # ==============================================
-            # FEATURE 2: PER-CHUNK ANALYSIS
-            # Runs the LLM on each chunk independently
-            # WHY: Long documents exceed LLM context limits; chunking ensures
-            #      all content is analyzed without truncation
-            # ==============================================
-            
-            # Create chunks from content
-            chunks = chunk_text(submission.original_content, chunk_size=600, overlap=100)
-            logger.info(f"Created {len(chunks)} chunks for analysis")
-            
-            # Build rules text once
-            rules_text = ComplianceEngine._format_rules_for_llm(rules)
-            
-            # Collect all violations from all chunks
+            # 4. Process each chunk
             all_violations = []
             
             for chunk in chunks:
-                logger.info(f"Analyzing chunk {chunk['index']} (chars {chunk['start']}-{chunk['end']})")
+                logger.info(f"Analyzing chunk {chunk.chunk_index + 1}/{len(chunks)}")
                 
-                # Build prompt for this chunk
-                prompt = ollama_service.build_prompt_for_chunk(chunk["text"], rules_text)
+                # Build prompt with chunk content
+                prompt = ComplianceEngine._build_compliance_prompt(
+                    content=chunk.text,
+                    rules=rules
+                )
+
+                # Send to Ollama
+                response = await ollama_service.generate_response(
+                    prompt=prompt,
+                    system_prompt="You are a compliance expert. Return ONLY valid JSON."
+                )
+
+                # Parse response
+                analysis_result = ComplianceEngine._parse_ollama_response(response)
                 
-                # Get and validate LLM response
-                llm_resp = await ollama_service.generate_and_validate_llm_response(prompt)
-                
-                # Process violations from this chunk
-                chunk_violations = llm_resp.get("violations", [])
-                
-                for vdict in chunk_violations:
-                    # ==============================================
-                    # FEATURE 7: OFFSET NORMALIZATION
-                    # Converts chunk offsets to global document offsets
-                    # WHY: Violations need to reference original document positions
-                    #      not chunk-relative positions
-                    # ==============================================
-                    if vdict.get("start_offset") is not None:
-                        vdict["start_offset"] = chunk["start"] + vdict["start_offset"]
-                    if vdict.get("end_offset") is not None:
-                        vdict["end_offset"] = chunk["start"] + vdict["end_offset"]
+                # Attach chunk reference to each violation
+                for violation_data in analysis_result["violations"]:
+                    # Build location string with chunk reference
+                    location = f"chunk:{chunk.id}"
                     
-                    # ==============================================
-                    # FEATURE 8: EXPLAINABILITY-READY OUTPUT
-                    # Prepares standardized output for future UI and audits
-                    # WHY: Downstream systems need chunk context, priority scores,
-                    #      and normalized offsets for proper display and sorting
-                    # ==============================================
-                    vdict["chunk_index"] = chunk["index"]
+                    # Add metadata info if available
+                    if chunk.metadata.get("page_number"):
+                        location += f":page:{chunk.metadata['page_number']}"
+                    elif chunk.metadata.get("char_offset_start") is not None:
+                        location += f":offset:{chunk.metadata['char_offset_start']}"
                     
-                    # Import compute_priority here to avoid circular import
-                    from .scoring_service import compute_priority
-                    vdict["priority"] = compute_priority(vdict)
+                    violation_data["location"] = location
+                    violation_data["chunk_index"] = chunk.chunk_index
                     
-                    all_violations.append(vdict)
-            
-            logger.info(f"Total violations found across all chunks: {len(all_violations)}")
-            
-            # Create analysis result
-            analysis_result = {
-                "violations": all_violations,
-                "overall_assessment": f"Analyzed {len(chunks)} chunks, found {len(all_violations)} violations."
-            }
+                all_violations.extend(analysis_result["violations"])
 
             # 6. Calculate scores (Phase 2: Pass DB session for rule-based scoring)
-            scores = scoring_service.calculate_scores(analysis_result["violations"], db=db)
+            scores = scoring_service.calculate_scores(all_violations, db=db)
 
             # 7. Store results
             compliance_check = ComplianceCheck(
@@ -164,13 +135,13 @@ Analyze the following content against these compliance rules:
                 seo_score=scores["seo"],
                 status=scores["status"],
                 grade=scores["grade"],
-                ai_summary=analysis_result.get("overall_assessment", "")
+                ai_summary=f"Analyzed {len(chunks)} chunk(s). {analysis_result.get('overall_assessment', '')}"
             )
             db.add(compliance_check)
             db.flush()
 
             # Store violations
-            for violation_data in analysis_result["violations"]:
+            for violation_data in all_violations:
                 # Find rule by ID (if provided)
                 rule = None
                 if violation_data.get("rule_id"):
@@ -193,7 +164,7 @@ Analyze the following content against these compliance rules:
                 db.add(violation)
 
             # Update submission status
-            submission.status = "completed"
+            submission.status = "analyzed"
             db.commit()
 
             logger.info(f"Analysis complete. Score: {scores['overall']}, Status: {scores['status']}")
@@ -267,34 +238,6 @@ Analyze the following content against these compliance rules:
             rules_section=rules_section,
             content=truncated_content
         )
-
-    @staticmethod
-    def _format_rules_for_llm(rules: Dict[str, List[Rule]]) -> str:
-        """Format rules into text for LLM prompts (used in per-chunk analysis)."""
-        rules_sections = []
-
-        # IRDAI Rules
-        if rules["irdai"]:
-            irdai_text = "**IRDAI Regulations:**\n"
-            for rule in rules["irdai"]:
-                irdai_text += f"- [ID: {rule.id}] {rule.rule_text} (Severity: {rule.severity})\n"
-            rules_sections.append(irdai_text)
-
-        # Brand Rules
-        if rules["brand"]:
-            brand_text = "**Brand Guidelines:**\n"
-            for rule in rules["brand"]:
-                brand_text += f"- [ID: {rule.id}] {rule.rule_text} (Severity: {rule.severity})\n"
-            rules_sections.append(brand_text)
-
-        # SEO Rules
-        if rules["seo"]:
-            seo_text = "**SEO Requirements:**\n"
-            for rule in rules["seo"]:
-                seo_text += f"- [ID: {rule.id}] {rule.rule_text} (Severity: {rule.severity})\n"
-            rules_sections.append(seo_text)
-
-        return "\n".join(rules_sections)
 
     @staticmethod
     def _parse_ollama_response(response: str) -> Dict[str, Any]:

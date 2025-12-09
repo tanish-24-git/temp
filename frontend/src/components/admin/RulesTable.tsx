@@ -114,9 +114,26 @@ export const RulesTable: React.FC<RulesTableProps> = ({
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <span className="text-sm font-mono text-gray-900">
-                    {rule.points_deduction}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {/* Mini progress bar showing penalty severity */}
+                    <div className="w-16 h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${rule.points_deduction <= -20 ? 'bg-red-500' :
+                            rule.points_deduction <= -10 ? 'bg-orange-500' :
+                              rule.points_deduction <= -5 ? 'bg-yellow-500' :
+                                'bg-green-500'
+                          }`}
+                        style={{ width: `${Math.min(100, Math.abs(rule.points_deduction) * 2)}%` }}
+                      />
+                    </div>
+                    <span className={`text-sm font-bold ${rule.points_deduction <= -20 ? 'text-red-600' :
+                        rule.points_deduction <= -10 ? 'text-orange-600' :
+                          rule.points_deduction <= -5 ? 'text-yellow-600' :
+                            'text-green-600'
+                      }`}>
+                      {rule.points_deduction}
+                    </span>
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <Badge

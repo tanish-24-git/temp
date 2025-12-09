@@ -2,6 +2,299 @@
 
 AI-powered compliance checking system for insurance marketing content using Ollama.
 
+## 📖 Application Concept
+
+### Overview
+
+The **Compliance Agent POC** is an intelligent, AI-powered system designed to automatically validate insurance marketing content against **IRDAI (Insurance Regulatory and Development Authority of India) regulations**, **brand guidelines**, and **SEO best practices**. This system combines rule-based validation with advanced LLM analysis to provide comprehensive compliance checking, violation detection, and automated fix suggestions.
+
+### Core Purpose
+
+Insurance companies must ensure all marketing materials comply with strict regulatory requirements. Manual compliance checking is:
+- Time-consuming and resource-intensive
+- Prone to human error
+- Difficult to scale across large content volumes
+- Challenging to maintain consistency
+
+This system automates compliance validation, providing instant feedback on regulatory violations, brand guideline adherence, and SEO optimization opportunities.
+
+### System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        USER INTERFACE                            │
+│  (React + TypeScript Dashboard - Upload, Review, Results)       │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────────┐
+│                      FASTAPI BACKEND                             │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  API Layer: Upload, Analysis, Admin, Dashboard          │  │
+│  └──────────────────────┬───────────────────────────────────┘  │
+│                         │                                        │
+│  ┌──────────────────────▼───────────────────────────────────┐  │
+│  │  Business Logic Layer                                     │  │
+│  │  • Compliance Engine (Core Analysis)                     │  │
+│  │  • Ollama Service (LLM Integration)                      │  │
+│  │  • Scoring Service (Point Calculation)                   │  │
+│  │  • Rule Generator (Dynamic Rule Creation)                │  │
+│  │  • Deep Analysis Engine (Line-by-Line)                   │  │
+│  │  • Content Parser (PDF/DOCX/HTML/MD)                     │  │
+│  └──────────────────────┬───────────────────────────────────┘  │
+└──────────────────────────┼──────────────────────────────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         │                 │                 │
+┌────────▼────────┐ ┌─────▼─────┐ ┌────────▼────────┐
+│   PostgreSQL    │ │   Ollama  │ │     Redis       │
+│   (Database)    │ │   (LLM)   │ │    (Cache)      │
+│                 │ │ qwen2.5:7b│ │                 │
+│ • Users         │ │           │ │ • Sessions      │
+│ • Submissions   │ │ AI Models │ │ • Analysis      │
+│ • Rules         │ │           │ │   Queue         │
+│ • Violations    │ │           │ │                 │
+│ • Deep Analysis │ │           │ │                 │
+│ • Knowledge Base│ │           │ │                 │
+└─────────────────┘ └───────────┘ └─────────────────┘
+```
+
+### Complete Workflow
+
+#### 1. **Content Submission** 
+```
+User uploads content → System parses file → Extracts text → Stores in database
+Supported formats: HTML, Markdown, PDF, DOCX
+```
+
+#### 2. **Compliance Analysis**
+```
+Trigger analysis → Load active rules from DB → Build AI prompt with rules
+                     ↓
+              Send to Ollama LLM
+                     ↓
+       Parse AI response (violations + suggestions)
+                     ↓
+       Calculate category scores (IRDAI, Brand, SEO)
+                     ↓
+       Compute weighted overall score
+                     ↓
+       Store results + violations in database
+```
+
+#### 3. **Deep Analysis (Optional)**
+```
+Line-by-line analysis → Each line scored independently
+                        ↓
+             Track which rules affect each line
+                        ↓
+             Store detailed impact analysis
+                        ↓
+             Generate governance audit trail
+```
+
+#### 4. **Results Review**
+```
+View dashboard → See overall scores and grades
+                 ↓
+      Drill into violations by category
+                 ↓
+      Review AI-suggested fixes
+                 ↓
+      Apply corrections manually or auto-fix
+```
+
+#### 5. **Rule Management (Super Admin)**
+```
+Upload regulatory document → AI extracts rules automatically
+                              ↓
+                   Rules validated and stored
+                              ↓
+                   Configurable point deductions
+                              ↓
+                   Rules immediately active for analysis
+```
+
+### Key Components
+
+#### **Compliance Engine**
+- Core analysis orchestrator
+- Coordinates between rule loading, AI analysis, and scoring
+- Implements retry logic and error handling
+- Generates structured compliance reports
+
+#### **Ollama LLM Integration**
+- Uses Qwen 2.5 (7B parameter model) for intelligent analysis
+- Structured prompt engineering for consistent outputs
+- Violation detection beyond simple keyword matching
+- Context-aware suggestion generation
+- Rule extraction from regulatory documents
+
+#### **Scoring System**
+- **Configurable Point Deductions**: Each rule has customizable penalty points
+- **Category-Based Scoring**: Separate scores for IRDAI, Brand, SEO
+- **Weighted Overall Score**: IRDAI (50%), Brand (30%), SEO (20%)
+- **Dynamic Recalculation**: Scores update when rule points are adjusted
+- **Grading System**: A-F letter grades based on overall performance
+
+#### **Rule Management System** (Phase 2)
+- **Dynamic Rule Generation**: Upload PDFs/DOCX → AI extracts rules
+- **Manual Rule Creation**: Admin interface for custom rules
+- **Rule Attribution**: Track which super admin created each rule
+- **Configurable Penalties**: Adjust point deductions without redeployment
+- **Rule Activation**: Enable/disable rules without deletion
+
+#### **Deep Analysis Engine** (Phase 2+)
+- **Line-by-Line Scoring**: Individual compliance score per line
+- **Rule Impact Tracking**: See which rules affect each line
+- **Governance Audit Trail**: Snapshot of severity weights used
+- **Statistical Summary**: Min/max/average scores across document
+- **Performance Optimized**: JSON storage for fast retrieval
+
+### Database Schema
+
+The system uses **10 core tables** (see `db_schema.sql` for complete schema):
+
+1. **users** - User accounts with role-based access (agent, reviewer, super_admin)
+2. **submissions** - Uploaded marketing content for analysis
+3. **rules** - Compliance rules with configurable scoring weights
+4. **compliance_checks** - High-level analysis results with scores and grades
+5. **violations** - Individual rule violations with suggested fixes
+6. **deep_analysis** - Line-by-line analysis with JSON storage
+7. **knowledge_base** - Regulatory documents for RAG (Retrieval-Augmented Generation)
+8. **agent_executions** - Agent execution tracking for observability
+9. **tool_invocations** - Individual tool calls made by agents
+10. **alembic_version** - Database migration versioning
+
+**Key Relationships**:
+- Users → Submissions (1:N) - Track who uploaded content
+- Users → Rules (1:N) - Track who created rules  
+- Submissions → Compliance Checks (1:N) - Multiple analyses per submission
+- Compliance Checks → Violations (1:N) - Multiple violations per check
+- Compliance Checks → Deep Analysis (1:1) - Optional detailed analysis
+- Rules → Violations (1:N) - Track which rules triggered violations
+- Agent Executions → Tool Invocations (1:N) - Observability tracking
+
+### Scoring Algorithm
+
+```python
+# Base score for each category
+base_score = 100.0
+
+# Deduct points for each violation
+for violation in violations:
+    rule = get_rule(violation.rule_id)
+    category_score -= rule.points_deduction  # e.g., -20 for critical, -5 for medium
+
+# Ensure scores don't go below 0
+category_score = max(0, min(100, category_score))
+
+# Calculate weighted overall score
+overall_score = (irdai_score * 0.50) + \
+                (brand_score * 0.30) + \
+                (seo_score * 0.20)
+
+# Determine grade and status
+grade = calculate_grade(overall_score)  # A-F
+status = "passed" if overall_score >= 80 else \
+         "flagged" if overall_score >= 60 else "failed"
+```
+
+**Default Point Deductions** (Configurable):
+- Critical violations: -20 points
+- High severity: -10 points
+- Medium severity: -5 points
+- Low severity: -2 points
+
+### Technology Stack
+
+**Backend**:
+- FastAPI (Python 3.11) - High-performance async API framework
+- PostgreSQL 15 - Relational database with JSONB support
+- SQLAlchemy 2.0 - Modern ORM with async capabilities
+- Alembic - Database migration management
+- Redis 7 - Caching and session storage
+
+**AI/ML**:
+- Ollama - Local LLM inference
+- Qwen 2.5 (7B) - Primary language model
+- Structured prompt engineering for consistency
+- JSON-based output parsing
+
+**Frontend**:
+- React 18 with TypeScript - Type-safe UI development
+- Vite 5 - Fast build tooling
+- Tailwind CSS - Utility-first styling
+- TanStack Table - High-performance data grids
+- Axios - HTTP client with interceptors
+
+**DevOps**:
+- Docker & Docker Compose - Containerization 
+- Multi-stage builds for optimization
+- Health checks and auto-restart policies
+
+### Security & Access Control
+
+**Role-Based Access Control (RBAC)**:
+- **Agent**: Upload content, view own submissions, trigger analysis
+- **Reviewer**: View all submissions, approve content
+- **Super Admin**: Full access + rule management + user management
+
+**Current Implementation** (POC):
+- Header-based authentication (`X-User-Id`)
+- Role validation at API endpoint level
+- Database-level foreign key constraints
+
+**Production Roadmap**:
+- JWT/OAuth2 token-based authentication
+- Session management with Redis
+- CSRF protection
+- Content Security Policy (CSP)
+- Rate limiting on uploads
+- File upload virus scanning
+
+### Advanced Features (Phase 2+)
+
+#### **Multi-Country Support**
+- Knowledge base stores regulations by country code
+- Extensible to GDPR (EU), FCA (UK), SEC (US), etc.
+- Locale-specific rule sets
+
+#### **Agent Observability**
+- Track every agent execution
+- Monitor token usage and costs
+- Debug tool invocations
+- Performance optimization insights
+
+#### **Governance & Audit Trail**
+- Snapshot of rule weights used for each analysis
+- Track who created/modified rules
+- Immutable violation records
+- Compliance report generation
+
+### Use Cases
+
+✅ **Marketing Teams**: Validate ad copy before publishing  
+✅ **Compliance Officers**: Audit existing materials at scale  
+✅ **Content Writers**: Get real-time feedback during creation  
+✅ **Legal Teams**: Ensure regulatory adherence  
+✅ **Operations**: Automate manual review processes  
+
+### Performance Characteristics
+
+- **Upload Processing**: < 2 seconds for typical documents
+- **AI Analysis**: 10-30 seconds (depends on content length and Ollama performance)
+- **Deep Analysis**: 15-45 seconds for line-by-line scoring
+- **Dashboard Load**: < 500ms for 1000+ submissions
+- **Rule Generation**: 15-35 seconds per regulatory document
+
+**Optimization Tips**:
+- Use GPU-enabled Ollama for 3-5x faster inference
+- Enable Redis caching for frequently accessed data
+- Implement background job queue (Celery) for async processing
+- Use pagination for large datasets
+
+---
+
 ## Features
 
 - **Content Upload**: Support for HTML, Markdown, PDF, and DOCX files
@@ -100,8 +393,11 @@ compliance-agent-poc/
 │   ├── package.json
 │   └── Dockerfile
 ├── docker-compose.yml         # Service orchestration
+├── db_schema.sql              # 📊 Complete database schema (10 tables)
 └── .env.example              # Environment variables template
 ```
+
+> 💡 **Database Schema**: See [`db_schema.sql`](./db_schema.sql) for the complete database structure with all tables, relationships, indexes, and detailed comments.
 
 ## Usage Guide
 
