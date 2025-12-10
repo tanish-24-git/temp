@@ -65,7 +65,15 @@ class ContentRetrievalService:
         if submission.status == "preprocessed" and submission.chunks:
             return self._get_real_chunks(submission, include_metadata)
         else:
-            return self._synthesize_legacy_chunk(submission)
+            # CRITICAL: Enforce token-based chunking - no synthetic fallback
+            logger.error(
+                f"🚫 NO REAL CHUNKS for submission {submission_id} (status={submission.status}) — "
+                f"MUST PREPROCESS WITH TOKEN CHUNKING FIRST"
+            )
+            raise ValueError(
+                f"Submission {submission_id} must be preprocessed with token-based chunking before retrieval. "
+                f"Current status: {submission.status}. Please call POST /api/preprocessing/{submission_id} first."
+            )
     
     def _get_real_chunks(
         self, 

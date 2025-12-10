@@ -67,12 +67,22 @@ async def preprocess_submission(
                 message="Submission already preprocessed"
             )
         
-        # Run preprocessing
+        # Run preprocessing with token-based parameters
         service = PreprocessingService(db)
+        
+        # Use chunk_tokens/overlap_tokens with proper defaults
+        chunk_tokens_value = request.chunk_tokens or request.chunk_size or 900
+        overlap_tokens_value = request.overlap_tokens or request.overlap or 200
+        
+        logger.info(
+            f"🔧 FIXED PARAMS: chunk_tokens={chunk_tokens_value}, "
+            f"overlap_tokens={overlap_tokens_value}"
+        )
+        
         chunks_created = await service.preprocess_submission(
             submission_id=submission_id,
-            chunk_tokens=request.chunk_size,
-            overlap_tokens=request.overlap
+            chunk_tokens=chunk_tokens_value,
+            overlap_tokens=overlap_tokens_value
         )
         
         # Refresh submission to get updated status

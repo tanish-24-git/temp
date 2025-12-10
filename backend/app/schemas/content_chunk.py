@@ -90,18 +90,34 @@ class ChunkDTO(BaseModel):
 
 
 class PreprocessingRequest(BaseModel):
-    """Request schema for preprocessing a submission"""
-    chunk_size: int = Field(
-        default=1000,
+    """Request schema for preprocessing a submission with token-based chunking"""
+    
+    # Primary token-based fields (recommended)
+    chunk_tokens: Optional[int] = Field(
+        default=900,
         ge=500,
-        le=5000,
-        description="Characters per chunk"
+        le=2000,
+        description="Tokens per chunk (recommended: 900)"
     )
-    overlap: int = Field(
-        default=100,
+    overlap_tokens: Optional[int] = Field(
+        default=200,
         ge=0,
         le=500,
-        description="Character overlap between chunks"
+        description="Token overlap between chunks (recommended: 200)"
+    )
+    
+    # Legacy fields for backward compatibility (deprecated)
+    chunk_size: Optional[int] = Field(
+        default=None,
+        ge=500,
+        le=5000,
+        description="[DEPRECATED] Use chunk_tokens instead. Characters per chunk."
+    )
+    overlap: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=500,
+        description="[DEPRECATED] Use overlap_tokens instead. Character overlap between chunks."
     )
 
 
