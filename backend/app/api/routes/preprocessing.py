@@ -71,8 +71,8 @@ async def preprocess_submission(
         service = PreprocessingService(db)
         chunks_created = await service.preprocess_submission(
             submission_id=submission_id,
-            chunk_size=request.chunk_size,
-            overlap=request.overlap
+            chunk_tokens=request.chunk_size,
+            overlap_tokens=request.overlap
         )
         
         # Refresh submission to get updated status
