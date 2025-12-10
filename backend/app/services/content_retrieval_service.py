@@ -61,19 +61,38 @@ class ContentRetrievalService:
         if not submission:
             raise ValueError(f"Submission {submission_id} not found")
         
-        # Check if submission has been preprocessed into chunks
-        if submission.status == "preprocessed" and submission.chunks:
-            return self._get_real_chunks(submission, include_metadata)
-        else:
-            # CRITICAL: Enforce token-based chunking - no synthetic fallback
-            logger.error(
-                f"🚫 NO REAL CHUNKS for submission {submission_id} (status={submission.status}) — "
-                f"MUST PREPROCESS WITH TOKEN CHUNKING FIRST"
+        # Disable synthetic fallback – always require real token chunks
+        if not submission.chunks or submission.status != "preprocessed":
+            logger.critical(
+                f"🚫 NO TOKEN CHUNKS AVAILABLE for submission {submission_id} — "
+                f"Run POST /api/preprocessing/{submission_id} first"
             )
             raise ValueError(
-                f"Submission {submission_id} must be preprocessed with token-based chunking before retrieval. "
-                f"Current status: {submission.status}. Please call POST /api/preprocessing/{submission_id} first."
+                f"Submission {submission_id} must be preprocessed with token-based chunking first"
             )
+        
+        # Always return real token chunks from DB with full metadata
+        real_chunks = (
+            self.db.query(ContentChunk)
+            .filter(ContentChunk.submission_id == submission_id)
+            .order_by(ContentChunk.chunk_index)
+            .all()
+        )
+        
+        logger.info(f"✅ Returning {len(real_chunks)} REAL token chunks with full metadata")
+        
+        # Convert to DTOs
+        chunk_dtos = []
+        for chunk in real_chunks:
+            chunk_dtos.append(ChunkDTO(
+                id=chunk.id,
+                text=chunk.text,
+                chunk_index=chunk.chunk_index,
+                token_count=chunk.token_count,
+                metadata=chunk.chunk_metadata if include_metadata else {}
+            ))
+        
+        return chunk_dtos
     
     def _get_real_chunks(
         self, 

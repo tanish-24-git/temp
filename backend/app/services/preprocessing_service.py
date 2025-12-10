@@ -398,16 +398,33 @@ class PreprocessingService:
             else:
                 raise ValueError(f"Unsupported content type: {submission.content_type}")
             
-            # Store chunks in database
+            # Store chunks in database with FULL token-based metadata
             for idx, chunk_data in enumerate(chunks_data):
+                # Ensure metadata contains all required token-based fields
+                metadata = chunk_data["metadata"]
+                
+                # Verify critical metadata fields are present
+                required_fields = ["chunk_method", "tokenizer_type"]
+                for field in required_fields:
+                    if field not in metadata:
+                        logger.warning(f"Missing metadata field '{field}' in chunk {idx}")
+                
                 chunk = ContentChunk(
                     submission_id=submission_id,
                     chunk_index=idx,
                     text=chunk_data["text"],
                     token_count=chunk_data["token_count"],
-                    metadata=chunk_data["metadata"]
+                    chunk_metadata=metadata  # FULL TOKEN METADATA with all fields
                 )
                 self.db.add(chunk)
+                
+                # Log first chunk metadata for verification
+                if idx == 0:
+                    logger.info(
+                        f"✅ Chunk 0 metadata: chunk_method={metadata.get('chunk_method')}, "
+                        f"tokenizer_type={metadata.get('tokenizer_type')}, "
+                        f"tokens={metadata.get('start_token')}-{metadata.get('end_token')}"
+                    )
             
             # Update submission status
             submission.status = "preprocessed"
