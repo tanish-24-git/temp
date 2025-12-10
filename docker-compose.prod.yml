@@ -62,13 +62,13 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - compliance-network
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     # NOTE: For CPU-only, remove the deploy section above
 
   # ===========================================================================

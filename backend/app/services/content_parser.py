@@ -108,6 +108,25 @@ class ContentParserService:
                 text.append(page.extract_text())
         return '\n'.join(text)
     
+    def extract_pdf_pages(self, file_path: str) -> list[str]:
+        """
+        Extract PDF as list of page texts for page-aware chunking.
+        
+        Args:
+            file_path: Path to PDF file
+            
+        Returns:
+            List of page texts (one string per page)
+        """
+        pages = []
+        with open(file_path, 'rb') as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                page_text = page.extract_text()
+                pages.append(page_text if page_text else "")
+        return pages
+    
     def parse_docx(self, file_path: str) -> str:
         """Synchronously parse DOCX file."""
         doc = docx.Document(file_path)
