@@ -1,6 +1,7 @@
 from typing import Dict, List, Any
 import json
 import logging
+import traceback
 from sqlalchemy.orm import Session
 from ..models.rule import Rule
 from ..models.submission import Submission
@@ -172,6 +173,8 @@ Analyze the following content against these compliance rules:
             return compliance_check
 
         except Exception as e:
+            # Print full traceback to help debug
+            traceback.print_exc()
             logger.error(f"Error analyzing submission: {str(e)}")
             if submission:
                 submission.status = "failed"
@@ -209,7 +212,6 @@ Analyze the following content against these compliance rules:
             irdai_text = "**IRDAI Regulations:**\n"
             for rule in rules["irdai"]:
                 irdai_text += f"- [ID: {rule.id}] {rule.rule_text} (Severity: {rule.severity})\n"
-                logger.info(rule)
             rules_sections.append(irdai_text)
 
         # Brand Rules
@@ -217,7 +219,6 @@ Analyze the following content against these compliance rules:
             brand_text = "**Brand Guidelines:**\n"
             for rule in rules["brand"]:
                 brand_text += f"- [ID: {rule.id}] {rule.rule_text} (Severity: {rule.severity})\n"
-                logger.info(rule)
 
             rules_sections.append(brand_text)
 
@@ -226,7 +227,6 @@ Analyze the following content against these compliance rules:
             seo_text = "**SEO Requirements:**\n"
             for rule in rules["seo"]:
                 seo_text += f"- [ID: {rule.id}] {rule.rule_text} (Severity: {rule.severity})\n"
-                logger.info(rule)
             rules_sections.append(seo_text)
 
         rules_section = "\n".join(rules_sections)
